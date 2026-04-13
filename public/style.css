@@ -307,20 +307,24 @@ main {
   border-radius: var(--radius);
   padding: 0.75rem;
   margin-bottom: 0.5rem;
-  transition: opacity 0.2s;
 }
 .comment.depth-0 { }
 .comment.depth-1, .comment.depth-2, .comment.depth-3,
 .comment.depth-4, .comment.depth-5 {
   border-left: 3px solid var(--border);
-  margin-left: 1rem;
   border-radius: 0 var(--radius) var(--radius) 0;
 }
-.comment.depth-1 { border-left-color: #93c5fd; }
+.comment.depth-1 { border-left-color: #93c5fd; margin-left: 1rem; }
 .comment.depth-2 { border-left-color: #a5f3fc; margin-left: 1.5rem; }
 .comment.depth-3 { border-left-color: #bbf7d0; margin-left: 2rem; }
 .comment.depth-4 { border-left-color: #d9f99d; margin-left: 2rem; }
 .comment.depth-5 { border-left-color: #e9d5ff; margin-left: 2rem; }
+
+/* Collapse */
+.comment.collapsed .comment-body,
+.comment.collapsed .comment-replies { display: none; }
+.comment.collapsed .comment-meta { opacity: 0.65; }
+.comment.collapsed { padding-bottom: 0.5rem; }
 
 .comment-meta {
   display: flex;
@@ -329,7 +333,21 @@ main {
   margin-bottom: 0.4rem;
   font-size: 0.78rem;
   flex-wrap: wrap;
+  cursor: pointer;
+  user-select: none;
 }
+.comment-meta:hover { opacity: 0.8; }
+
+.collapse-btn {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  width: 1rem;
+  text-align: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 .comment-author {
   font-weight: 700;
   color: var(--text);
@@ -340,6 +358,15 @@ main {
   font-weight: 600;
 }
 .comment-time { color: var(--text-muted); }
+
+.reply-count {
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+.reply-count.hidden-on-expand { display: none; }
+.comment.collapsed .reply-count.hidden-on-expand { display: inline; }
+
 .comment-body {
   font-size: 0.9rem;
   line-height: 1.55;
@@ -371,11 +398,6 @@ main {
   margin: 0.4em 0;
 }
 .comment-replies { margin-top: 0.5rem; }
-
-/* Spoiler-filtered comment */
-.comment.spoiler-hidden {
-  display: none;
-}
 
 /* Spoiler warning banner */
 .spoiler-banner {
@@ -421,8 +443,8 @@ footer {
   .logo-text { font-size: 1.6rem; }
   main { padding: 1.5rem; }
   .card { padding: 1.5rem; }
-  .comment.depth-2 { margin-left: 2rem; }
-  .comment.depth-3 { margin-left: 3rem; }
-  .comment.depth-4 { margin-left: 3.5rem; }
-  .comment.depth-5 { margin-left: 4rem; }
+  .comment.depth-2 { margin-left: 1.75rem; }
+  .comment.depth-3 { margin-left: 2rem; }
+  .comment.depth-4 { margin-left: 2rem; }
+  .comment.depth-5 { margin-left: 2rem; }
 }

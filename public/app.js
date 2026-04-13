@@ -97,7 +97,7 @@ loadBtn.addEventListener("click", async () => {
     const season = seasonInput.value.trim();
     const ep = episodeInput.value.trim();
 
-    if (!show || !season || !ep) {
+if (!show || !season || !ep) {
       showStatus("Please enter show name, season, and episode.", "error");
       return;
     }
@@ -219,34 +219,48 @@ function renderComments(comments, container = commentsEl, depth = 0) {
   }
 
   for (const comment of comments) {
-    const isSpoiler = cutoffTimestamp && comment.created_utc >= cutoffTimestamp;
-
-    if (isSpoiler) continue; // hide spoiler comment and all its replies
+    if (cutoffTimestamp && comment.created_utc >= cutoffTimestamp) continue;
 
     const el = document.createElement("div");
     el.className = `comment depth-${Math.min(depth, 5)}`;
-    el.innerHTML = buildCommentHTML(comment, depth);
-    container.appendChild(el);
 
-    if (comment.replies && comment.replies.length > 0) {
-      renderComments(comment.replies, container, depth + 1);
-    }
-  }
-}
-
-function buildCommentHTML(comment, depth) {
-  const date = formatDate(comment.created_utc);
-  const authorClass = comment.author === "[deleted]" ? " deleted" : "";
-  const bodyHtml = renderMarkdown(comment.body);
-
-  return `
-    <div class="comment-meta">
+    // Header (clickable to collapse)
+    const meta = document.createElement("div");
+    meta.className = "comment-meta";
+    const authorClass = comment.author === "[deleted]" ? " deleted" : "";
+    const replyCount = countComments(comment.replies || []);
+    meta.innerHTML = `
+      <span class="collapse-btn" title="Collapse">−</span>
       <span class="comment-author${authorClass}">${escHtml(comment.author)}</span>
       <span class="comment-score">▲ ${formatScore(comment.score)}</span>
-      <span class="comment-time">${date}</span>
-    </div>
-    <div class="comment-body">${bodyHtml}</div>
-  `;
+      <span class="comment-time">${formatDate(comment.created_utc)}</span>
+      ${replyCount > 0 ? `<span class="reply-count hidden-on-expand">${replyCount} repl${replyCount === 1 ? "y" : "ies"}</span>` : ""}
+    `;
+    el.appendChild(meta);
+
+    // Body
+    const body = document.createElement("div");
+    body.className = "comment-body";
+    body.innerHTML = renderMarkdown(comment.body);
+    el.appendChild(body);
+
+    // Replies (nested inside the comment element)
+    if (comment.replies && comment.replies.length > 0) {
+      const repliesEl = document.createElement("div");
+      repliesEl.className = "comment-replies";
+      renderComments(comment.replies, repliesEl, depth + 1);
+      el.appendChild(repliesEl);
+    }
+
+    // Collapse toggle
+    meta.addEventListener("click", () => {
+      el.classList.toggle("collapsed");
+      meta.querySelector(".collapse-btn").textContent =
+        el.classList.contains("collapsed") ? "+" : "−";
+    });
+
+    container.appendChild(el);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,7 @@
 import os
 import requests
-from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import praw
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,23 +9,49 @@ load_dotenv()
 app = Flask(__name__, static_folder="public", static_url_path="")
 CORS(app)
 
-# --- Reddit client (read-only, no user login required) ---
-reddit = praw.Reddit(
-    client_id=os.environ["REDDIT_CLIENT_ID"],
-    client_secret=os.environ["REDDIT_CLIENT_SECRET"],
-    user_agent=os.environ.get("REDDIT_USER_AGENT", "web:PlotArmor:1.0"),
-)
-
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 TMDB_BASE = "https://api.themoviedb.org/3"
 
+REDDIT_BACKEND = os.environ.get("REDDIT_BACKEND", "json").lower()  # "json" or "praw"
+REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT", "web:PlotArmor:1.0")
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Reddit backend: PRAW
 # ---------------------------------------------------------------------------
+_reddit = None
 
-def comment_to_dict(comment, depth=0):
-    """Recursively convert a PRAW Comment to a plain dict."""
+def get_praw_client():
+    global _reddit
+    if _reddit is None:
+        import praw
+        _reddit = praw.Reddit(
+            client_id=os.environ["REDDIT_CLIENT_ID"],
+            client_secret=os.environ["REDDIT_CLIENT_SECRET"],
+            user_agent=REDDIT_USER_AGENT,
+        )
+    return _reddit
+
+
+def fetch_thread_praw(url):
+    reddit = get_praw_client()
+    submission = reddit.submission(url=url)
+    submission.comments.replace_more(limit=32)
+
+    post = {
+        "title": submission.title,
+        "author": str(submission.author) if submission.author else "[deleted]",
+        "subreddit": submission.subreddit.display_name,
+        "score": submission.score,
+        "created_utc": submission.created_utc,
+        "selftext": submission.selftext,
+        "url": submission.url,
+        "num_comments": submission.num_comments,
+    }
+    comments = [_praw_comment_to_dict(c) for c in submission.comments if hasattr(c, "body")]
+    return post, comments
+
+
+def _praw_comment_to_dict(comment, depth=0):
     return {
         "id": comment.id,
         "author": str(comment.author) if comment.author else "[deleted]",
@@ -36,12 +60,80 @@ def comment_to_dict(comment, depth=0):
         "created_utc": comment.created_utc,
         "depth": depth,
         "replies": [
-            comment_to_dict(reply, depth + 1)
-            for reply in comment.replies
-            if hasattr(reply, "body")  # skip MoreComments stubs
+            _praw_comment_to_dict(r, depth + 1)
+            for r in comment.replies
+            if hasattr(r, "body")
         ],
     }
 
+
+# ---------------------------------------------------------------------------
+# Reddit backend: .json
+# ---------------------------------------------------------------------------
+
+def fetch_thread_json(url):
+    json_url = url.split("?")[0].rstrip("/") + ".json"
+    resp = requests.get(
+        json_url,
+        headers={"User-Agent": REDDIT_USER_AGENT},
+        params={"limit": 500, "depth": 10, "sort": "top"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    p = data[0]["data"]["children"][0]["data"]
+    post = {
+        "title": p["title"],
+        "author": p.get("author") or "[deleted]",
+        "subreddit": p["subreddit"],
+        "score": p["score"],
+        "created_utc": p["created_utc"],
+        "selftext": p.get("selftext", ""),
+        "url": p.get("url", ""),
+        "num_comments": p.get("num_comments", 0),
+    }
+    comments = _parse_json_comments(data[1]["data"]["children"])
+    return post, comments
+
+
+def _parse_json_comments(children, depth=0):
+    result = []
+    for child in children:
+        if child["kind"] != "t1":
+            continue
+        d = child["data"]
+        replies_raw = d.get("replies")
+        replies = (
+            _parse_json_comments(replies_raw["data"]["children"], depth + 1)
+            if isinstance(replies_raw, dict)
+            else []
+        )
+        result.append({
+            "id": d["id"],
+            "author": d.get("author") or "[deleted]",
+            "body": d.get("body", ""),
+            "score": d.get("score", 0),
+            "created_utc": d["created_utc"],
+            "depth": depth,
+            "replies": replies,
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Shared fetch dispatcher
+# ---------------------------------------------------------------------------
+
+def fetch_thread(url):
+    if REDDIT_BACKEND == "praw":
+        return fetch_thread_praw(url)
+    return fetch_thread_json(url)
+
+
+# ---------------------------------------------------------------------------
+# TMDB helpers
+# ---------------------------------------------------------------------------
 
 def tmdb_search_show(query):
     resp = requests.get(
@@ -51,9 +143,7 @@ def tmdb_search_show(query):
     )
     resp.raise_for_status()
     results = resp.json().get("results", [])
-    if not results:
-        return None
-    return results[0]  # best match
+    return results[0] if results else None
 
 
 def tmdb_episode_air_date(show_id, season, episode):
@@ -65,7 +155,7 @@ def tmdb_episode_air_date(show_id, season, episode):
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
-    return resp.json().get("air_date")  # "YYYY-MM-DD"
+    return resp.json().get("air_date")
 
 
 # ---------------------------------------------------------------------------
@@ -82,38 +172,15 @@ def get_thread():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"error": "Missing url parameter"}), 400
-
     try:
-        submission = reddit.submission(url=url)
-        # Expand all "load more" comment stubs (up to 512 extra API calls max)
-        submission.comments.replace_more(limit=32)
-
-        post = {
-            "title": submission.title,
-            "author": str(submission.author) if submission.author else "[deleted]",
-            "subreddit": submission.subreddit.display_name,
-            "score": submission.score,
-            "created_utc": submission.created_utc,
-            "selftext": submission.selftext,
-            "url": submission.url,
-            "num_comments": submission.num_comments,
-        }
-
-        comments = [comment_to_dict(c) for c in submission.comments if hasattr(c, "body")]
-
-        return jsonify({"post": post, "comments": comments})
-
+        post, comments = fetch_thread(url)
+        return jsonify({"post": post, "comments": comments, "backend": REDDIT_BACKEND})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/episode")
 def get_episode():
-    """
-    Look up the air date of the NEXT episode after what the user has watched.
-    Params: show, season (int), episode (int)
-    Returns: { cutoffDate, nextEpisode, showName }
-    """
     show = request.args.get("show", "").strip()
     try:
         season = int(request.args.get("season", 0))
@@ -132,19 +199,14 @@ def get_episode():
         show_id = show_result["id"]
         show_name = show_result["name"]
 
-        # Try next episode in same season first
-        next_ep = episode + 1
-        next_season = season
-        air_date = tmdb_episode_air_date(show_id, next_season, next_ep)
-
-        # If not found, try first episode of next season
+        # Try next episode in same season, then first of next season
+        air_date = tmdb_episode_air_date(show_id, season, episode + 1)
+        next_season, next_ep = season, episode + 1
         if air_date is None:
-            next_season = season + 1
-            next_ep = 1
+            next_season, next_ep = season + 1, 1
             air_date = tmdb_episode_air_date(show_id, next_season, next_ep)
 
         if air_date is None:
-            # User is on the series finale — no spoilers possible
             return jsonify({
                 "cutoffDate": None,
                 "nextEpisode": None,
@@ -164,7 +226,6 @@ def get_episode():
 
 @app.route("/api/search-show")
 def search_show():
-    """Return top TMDB matches for a show name (for autocomplete / confirmation)."""
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify([])
@@ -185,5 +246,5 @@ def search_show():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
