@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: plot-armor
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app
+    envVars:
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USER_AGENT
+        value: web:PlotArmor:1.0
+      - key: TMDB_API_KEY
+        sync: false
